@@ -7,12 +7,10 @@ namespace CodeChallenge.Api.Logic
     {
         private readonly Message _messages = new();
         private readonly IMessageRepository _messageRepository;
-        private readonly ILogger<MessageLogic> _logger;
         private readonly object _lock = new();
-        public MessageLogic(ILogger<MessageLogic> logger,
-            IMessageRepository messageRepository)
+        public MessageLogic(IMessageRepository messageRepository)
         {
-            _logger = logger;
+           
             _messageRepository = messageRepository;
 
         }
@@ -117,6 +115,11 @@ namespace CodeChallenge.Api.Logic
         {
             lock (_lock)
             {
+                var message = _messageRepository.GetByIdAsync(organizationId, id).Result;
+
+                if (message == null)
+                    return Task.FromResult<Result>(new NotFound("Message not found."));
+
                 _messageRepository.DeleteAsync(organizationId, id);
                 return Task.FromResult<Result>(new Deleted());
             }
