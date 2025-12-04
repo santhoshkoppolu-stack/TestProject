@@ -7,122 +7,95 @@ namespace CodeChallenge.Api.Logic
     {
         private readonly Message _messages = new();
         private readonly IMessageRepository _messageRepository;
-        private readonly object _lock = new();
         public MessageLogic(IMessageRepository messageRepository)
         {
-           
             _messageRepository = messageRepository;
-
         }
 
-        public Task<IEnumerable<Message>> GetAllMessagesAsync(Guid organizationId)
+        public async Task<IEnumerable<Message>> GetAllMessagesAsync(Guid organizationId)
         {
-            lock (_lock)
-            {
-                var messages = _messageRepository.GetAllByOrganizationAsync(organizationId);
-                return Task.FromResult<IEnumerable<Message>>(messages.Result);
-            }
+            return await _messageRepository.GetAllByOrganizationAsync(organizationId);
         }
 
-        public Task<Message?> GetMessageAsync(Guid organizationId, Guid id)
+        public async Task<Message?> GetMessageAsync(Guid organizationId, Guid id)
         {
-            lock (_lock)
-            {
-                var message = _messageRepository.GetByIdAsync(organizationId, id);
-                return Task.FromResult<Message?>(message.Result);
-            }
+            return await _messageRepository.GetByIdAsync(organizationId, id);
         }
 
-        public Task<Result> CreateMessageAsync(Guid organizationId, CreateMessageRequest request)
+        public async Task<Result> CreateMessageAsync(Guid organizationId, CreateMessageRequest request)
         {
-            lock (_lock)
+            var validation = ValidateMessage(request.Title, request.Content);
+            if (validation is ValidationError)
+                return validation;
+
+            var existing = await _messageRepository.GetByTitleAsync(organizationId, request.Title);
+            if (existing != null)
+                return new Conflict("A message with this title already exists.");
+
+            var message = new Message
             {
-                var errors = new Dictionary<string, string[]>();
+                Id = Guid.NewGuid(),
+                Title = request.Title,
+                Content = request.Content,
+                CreatedAt = DateTime.UtcNow,
+                OrganizationId = organizationId,
+                IsActive = true
+            };
 
-                
-                if (string.IsNullOrWhiteSpace(request.Title))
-                    errors["Title"] = new[] { "Title is required." };
+            await _messageRepository.CreateAsync(message);
 
-                
-                if (!string.IsNullOrWhiteSpace(request.Title) &&
-                    (request.Title.Length < 3 || request.Title.Length > 200))
-                    errors["Title"] = new[] { "Title must be between 3 and 200 characters." };
-
-                
-                if (string.IsNullOrWhiteSpace(request.Content) ||
-                    request.Content.Length < 10 || request.Content.Length > 1000)
-                    errors["Content"] = new[] { "Content must be between 10 and 1000 characters." };
-
-                
-                var result = _messageRepository.GetByTitleAsync(organizationId, request.Title).Result;
-                if (result != null)
-                    return Task.FromResult<Result>(new Conflict("A message with this title already exists."));
-
-                if (errors.Any())
-                    return Task.FromResult<Result>(new ValidationError(errors));
-                _messages.Title = request.Title;
-                _messages.Content = request.Content;
-                _messages.CreatedAt = DateTime.Now;
-                _messages.OrganizationId = organizationId;
-                _messageRepository.CreateAsync(_messages);
-
-                return Task.FromResult<Result>(new Created<Message>(_messages));
-            }
-        }
-        public Task<Result> UpdateMessageAsync(Guid organizationId, Guid id, UpdateMessageRequest request)
-        {
-            lock (_lock)
-            {
-                var message = _messageRepository.GetByIdAsync(id, organizationId).Result;
-
-                
-                if (message == null)
-                    return Task.FromResult<Result>(new NotFound("Message not found."));
-
-               
-                if (message != null && !message.IsActive)
-                    return Task.FromResult<Result>(new Conflict("Cannot update an inactive message."));
-
-               
-                var errors = new Dictionary<string, string[]>();
-
-                if (string.IsNullOrWhiteSpace(request.Title))
-                    errors["Title"] = new[] { "Title is required." };
-
-                if (!string.IsNullOrWhiteSpace(request.Title) &&
-                    (request.Title.Length < 3 || request.Title.Length > 200))
-                    errors["Title"] = new[] { "Title must be between 3 and 200 characters." };
-
-                if (string.IsNullOrWhiteSpace(request.Content) ||
-                    request.Content.Length < 10 || request.Content.Length > 1000)
-                    errors["Content"] = new[] { "Content must be between 10 and 1000 characters." };
-
-                if (errors.Any())
-                    return Task.FromResult<Result>(new ValidationError(errors));
-
-                _messages.Title = request.Title;
-                _messages.Content = request.Content;
-                _messages.UpdatedAt = DateTime.Now;
-                _messages.OrganizationId = organizationId;
-                _messageRepository.UpdateAsync(_messages);
-                return Task.FromResult<Result>(new Updated());
-
-            }
+            return new Created<Message>(message);
 
         }
-
-        public Task<Result> DeleteMessageAsync(Guid organizationId, Guid id)
+        public async Task<Result> UpdateMessageAsync(Guid organizationId, Guid id, UpdateMessageRequest request)
         {
-            lock (_lock)
+            var message = await _messageRepository.GetByIdAsync(organizationId, id);
+
+            if (message == null)
+                return new NotFound("Message not found.");
+
+            if (!message.IsActive)
+                return new Conflict("Cannot update an inactive message.");
+
+            var validation = ValidateMessage(request.Title, request.Content);
+            if (validation is ValidationError)
+                return validation;
+
+            message.Title = request.Title;
+            message.Content = request.Content;
+            message.UpdatedAt = DateTime.UtcNow;
+
+            await _messageRepository.UpdateAsync(message);
+
+            return new Updated();
+        }
+
+        public async Task<Result> DeleteMessageAsync(Guid organizationId, Guid id)
+        {
+            var message = await _messageRepository.GetByIdAsync(organizationId, id);
+
+            if (message == null)
+                return new NotFound("Message not found.");
+
+            await _messageRepository.DeleteAsync(organizationId, id);
+            return new Deleted();
+        }
+
+        private Result ValidateMessage(string title, string content)
+        {
+            var errors = new Dictionary<string, string[]>();
+
+            if (string.IsNullOrWhiteSpace(title))
+                errors["Title"] = new[] { "Title is required." };
+            else if (title.Length < 3 || title.Length > 200)
+                errors["Title"] = new[] { "Title must be between 3 and 200 characters." };
+
+            if (string.IsNullOrWhiteSpace(content) || content.Length < 10 || content.Length > 1000)
             {
-                var message = _messageRepository.GetByIdAsync(organizationId, id).Result;
-
-                if (message == null)
-                    return Task.FromResult<Result>(new NotFound("Message not found."));
-
-                _messageRepository.DeleteAsync(organizationId, id);
-                return Task.FromResult<Result>(new Deleted());
+                errors["Content"] = new[] { "Content must be between 10 and 1000 characters." };
             }
+
+            return errors.Any() ? new ValidationError(errors) : new Success();
         }
     }
 }
